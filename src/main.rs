@@ -16,7 +16,7 @@ const HEIGHT: usize = 30;
 const ROAD_WIDTH: usize = 10;
 
 struct Scene {
-    road: VecDeque<char>,
+    road: VecDeque<Vec<char>>,
     car_position: usize,
     car_velocity: isize,
     game_running: bool,
@@ -25,7 +25,7 @@ struct Scene {
 
 impl Scene {
     fn new() -> Self {
-        let road = VecDeque::from(vec![' '; WIDTH]);
+        let road = VecDeque::from(vec![vec![' '; WIDTH]; HEIGHT]);
         Self {
             road,
             car_position: WIDTH / 2,
@@ -36,11 +36,13 @@ impl Scene {
     }
 
     fn initialize_scene(&mut self) {
-        for i in 0..WIDTH {
-            if i >= (WIDTH - ROAD_WIDTH) / 2 && i < (WIDTH + ROAD_WIDTH) / 2 {
-                self.road[i] = ' ';
-            } else {
-                self.road[i] = '.';
+        for i in 0..HEIGHT {
+            for j in 0..WIDTH {
+                if j >= (WIDTH - ROAD_WIDTH) / 2 && j < (WIDTH + ROAD_WIDTH) / 2 {
+                    self.road[i][j] = ' ';
+                } else {
+                    self.road[i][j] = '.';
+                }
             }
         }
     }
@@ -52,14 +54,14 @@ impl Scene {
 
         for row in 0..HEIGHT {
             for col in 0..WIDTH {
-                if col == self.car_position && row == HEIGHT / 2 {
+                if row == HEIGHT / 2 && col == self.car_position {
                     stdout
                         .execute(crossterm::style::SetForegroundColor(Color::Yellow))
                         .unwrap();
                     write!(stdout, "^").unwrap();
                     stdout.execute(crossterm::style::ResetColor).unwrap();
                 } else {
-                    write!(stdout, "{}", self.road[col]).unwrap();
+                    write!(stdout, "{}", self.road[row][col]).unwrap();
                 }
             }
             writeln!(stdout).unwrap();
@@ -91,11 +93,28 @@ impl Scene {
             self.car_position = new_position as usize;
         }
 
-        if self.road[self.car_position] != ' ' {
+        if self.road[HEIGHT / 2][self.car_position] != ' ' {
             self.game_running = false;
         }
 
         self.score += 1;
+    }
+
+    fn simulate_road_movement(&mut self) {
+        for row in 0..HEIGHT - 1 {
+            self.road[row] = self.road[row + 1].clone();
+        }
+
+        let left_bound = (WIDTH - ROAD_WIDTH) / 2;
+        let right_bound = (WIDTH + ROAD_WIDTH) / 2;
+
+        for col in 0..WIDTH {
+            if col < left_bound || col > right_bound {
+                self.road[HEIGHT - 1][col] = '.';
+            } else {
+                self.road[HEIGHT - 1][col] = ' ';
+            }
+        }
     }
 }
 
@@ -109,6 +128,7 @@ fn main() {
 
     while game_scene.game_running {
         game_scene.handle_input();
+        game_scene.simulate_road_movement();
         game_scene.update();
         game_scene.render();
         thread::sleep(Duration::from_millis(33));
