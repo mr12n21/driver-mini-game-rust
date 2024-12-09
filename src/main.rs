@@ -8,113 +8,127 @@ use crossterm::{
 };
 use std::collections::VecDeque;
 use std::io::{stdout, Write};
-use std::thread;
-use std::time::Duration;
+use std::{thread, time::Duration};
 
 const WIDTH: usize = 50;
-const HEIGHT: usize = 30;
-const ROAD_WIDTH: usize = 10;
+const HEIGHT: usize = 20;
+const ROAD_WIDTH: usize = 12;
 
-struct Scene {
-    road: VecDeque<Vec<char>>,
-    car_position: usize,
-    car_velocity: isize,
-    game_running: bool,
+struct Car {
+    position: usize,
+    velocity: f64, // Simulate realistic velocity
+}
+
+impl Car {
+    fn new() -> Self {
+        Self {
+            position: WIDTH / 2,
+            velocity: 0.0,
+        }
+    }
+
+    /// Update the car's position with physics
+    fn update(&mut self) {
+        self.position = (self.position as f64 + self.velocity) as usize;
+
+        // Clamp the position so it doesn't go out of bounds
+        if self.position < 0 {
+            self.position = 0;
+        } else if self.position >= WIDTH {
+            self.position = WIDTH - 1;
+        }
+    }
+
+    /// Apply left/right movement changes
+    fn apply_input(&mut self, input: f64) {
+        self.velocity = input;
+    }
+}
+
+struct Game {
+    car: Car,
+    road: VecDeque<char>, // Road as a scrolling 1D representation
+    game_over: bool,
     score: usize,
 }
 
-impl Scene {
+impl Game {
     fn new() -> Self {
-        let road = VecDeque::from(vec![vec![' '; WIDTH]; HEIGHT]);
+        let mut road = VecDeque::new();
+        for _ in 0..HEIGHT {
+            road.push_back(random_road_segment());
+        }
+
         Self {
+            car: Car::new(),
             road,
-            car_position: WIDTH / 2,
-            car_velocity: 0,
-            game_running: true,
+            game_over: false,
             score: 0,
         }
     }
 
-    fn initialize_scene(&mut self) {
-        for i in 0..HEIGHT {
-            for j in 0..WIDTH {
-                if j >= (WIDTH - ROAD_WIDTH) / 2 && j < (WIDTH + ROAD_WIDTH) / 2 {
-                    self.road[i][j] = ' ';
-                } else {
-                    self.road[i][j] = '.';
-                }
-            }
-        }
+    /// Scroll the "road" effect by moving the deque forward
+    fn scroll_road(&mut self) {
+        self.road.pop_front();
+        self.road.push_back(random_road_segment());
     }
 
+    /// Render the scene on screen
     fn render(&self) {
         let mut stdout = stdout();
         stdout.execute(terminal::Clear(ClearType::All)).unwrap();
         stdout.execute(cursor::MoveTo(0, 0)).unwrap();
 
-        for row in 0..HEIGHT {
-            for col in 0..WIDTH {
-                if row == HEIGHT / 2 && col == self.car_position {
-                    stdout
-                        .execute(crossterm::style::SetForegroundColor(Color::Yellow))
-                        .unwrap();
-                    write!(stdout, "^").unwrap();
-                    stdout.execute(crossterm::style::ResetColor).unwrap();
-                } else {
-                    write!(stdout, "{}", self.road[row][col]).unwrap();
-                }
-            }
+        for y in 0..HEIGHT {
+            stdout.execute(crossterm::style::SetForegroundColor(Color::White)).unwrap();
+            write!(stdout, "{}", self.road[y]);
+            stdout.execute(crossterm::style::ResetColor).unwrap();
             writeln!(stdout).unwrap();
         }
 
-        writeln!(stdout, "Score: {}", self.score).unwrap();
+        // Render the car
+        stdout.execute(crossterm::style::SetForegroundColor(Color::Yellow)).unwrap();
+        write!(stdout, "{}", "^".repeat(1));
+        stdout.execute(crossterm::style::ResetColor).unwrap();
+        writeln!(stdout).unwrap();
         stdout.flush().unwrap();
     }
 
+    /// Handle user input (left/right/stop/quit logic)
     fn handle_input(&mut self) {
         while event::poll(Duration::from_millis(0)).unwrap() {
             if let Event::Key(key) = event::read().unwrap() {
                 match key.code {
-                    KeyCode::Left => self.car_velocity = -1,
-                    KeyCode::Right => self.car_velocity = 1,
-                    KeyCode::Up | KeyCode::Down => self.car_velocity = 0,
-                    KeyCode::Esc => {
-                        self.game_running = false;
-                    }
+                    KeyCode::Left => self.car.apply_input(-1.0),
+                    KeyCode::Right => self.car.apply_input(1.0),
+                    KeyCode::Esc => self.game_over = true,
                     _ => {}
                 }
             }
         }
     }
 
-    fn update(&mut self) {
-        let new_position = self.car_position as isize + self.car_velocity;
-        if new_position >= 0 && new_position < WIDTH as isize {
-            self.car_position = new_position as usize;
+    fn main_loop(&mut self) {
+        while !self.game_over {
+            self.handle_input();
+            self.car.update();
+            self.scroll_road();
+            self.render();
+            self.score += 1;
+
+            thread::sleep(Duration::from_millis(33));
         }
 
-        if self.road[HEIGHT / 2][self.car_position] != ' ' {
-            self.game_running = false;
-        }
-
-        self.score += 1;
+        println!("Game Over! Final Score: {}", self.score);
     }
+}
 
-    fn simulate_road_movement(&mut self) {
-        for row in 0..HEIGHT - 1 {
-            self.road[row] = self.road[row + 1].clone();
-        }
-
-        let left_bound = (WIDTH - ROAD_WIDTH) / 2;
-        let right_bound = (WIDTH + ROAD_WIDTH) / 2;
-
-        for col in 0..WIDTH {
-            if col < left_bound || col > right_bound {
-                self.road[HEIGHT - 1][col] = '.';
-            } else {
-                self.road[HEIGHT - 1][col] = ' ';
-            }
-        }
+/// Simulate road randomness
+fn random_road_segment() -> char {
+    if rand::random::<f32>() > 0.8 {
+        '.'
+    } else {
+        ' '
     }
 }
 
@@ -123,18 +137,9 @@ fn main() {
     terminal::enable_raw_mode().unwrap();
     stdout.execute(cursor::Hide).unwrap();
 
-    let mut game_scene = Scene::new();
-    game_scene.initialize_scene();
-
-    while game_scene.game_running {
-        game_scene.handle_input();
-        game_scene.simulate_road_movement();
-        game_scene.update();
-        game_scene.render();
-        thread::sleep(Duration::from_millis(33));
-    }
+    let mut game = Game::new();
+    game.main_loop();
 
     terminal::disable_raw_mode().unwrap();
     stdout.execute(cursor::Show).unwrap();
-    println!("Game Over! Final Score: {}", game_scene.score);
 }
