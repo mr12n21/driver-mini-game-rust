@@ -1,145 +1,109 @@
 use crossterm::{
     cursor,
     event::{self, Event, KeyCode},
-    execute,
-    style::Color,
     terminal::{self, ClearType},
-    ExecutableCommand,
+    ExecutableCommand, // Required for `.execute`
 };
-use std::collections::VecDeque;
+use rand::Rng;
 use std::io::{stdout, Write};
 use std::{thread, time::Duration};
 
-const WIDTH: usize = 50;
-const HEIGHT: usize = 20;
-const ROAD_WIDTH: usize = 12;
-
-struct Car {
-    position: usize,
-    velocity: f64, // Simulate realistic velocity
-}
-
-impl Car {
-    fn new() -> Self {
-        Self {
-            position: WIDTH / 2,
-            velocity: 0.0,
-        }
-    }
-
-    /// Update the car's position with physics
-    fn update(&mut self) {
-        self.position = (self.position as f64 + self.velocity) as usize;
-
-        // Clamp the position so it doesn't go out of bounds
-        if self.position < 0 {
-            self.position = 0;
-        } else if self.position >= WIDTH {
-            self.position = WIDTH - 1;
-        }
-    }
-
-    /// Apply left/right movement changes
-    fn apply_input(&mut self, input: f64) {
-        self.velocity = input;
-    }
-}
+const ROAD_WIDTH: usize = 20;
+const SCREEN_HEIGHT: u16 = 20;
+const PLAYER_SYMBOL: char = '^';
+const OBSTACLE_SYMBOL: char = '|';
 
 struct Game {
-    car: Car,
-    road: VecDeque<char>, // Road as a scrolling 1D representation
-    game_over: bool,
-    score: usize,
+    player_x: usize,
+    obstacles: Vec<(usize, u16)>, // x-coordinate and y-coordinate of obstacles
 }
 
 impl Game {
     fn new() -> Self {
-        let mut road = VecDeque::new();
-        for _ in 0..HEIGHT {
-            road.push_back(random_road_segment());
-        }
-
         Self {
-            car: Car::new(),
-            road,
-            game_over: false,
-            score: 0,
+            player_x: ROAD_WIDTH / 2,
+            obstacles: Vec::new(),
         }
     }
 
-    /// Scroll the "road" effect by moving the deque forward
-    fn scroll_road(&mut self) {
-        self.road.pop_front();
-        self.road.push_back(random_road_segment());
-    }
-
-    /// Render the scene on screen
-    fn render(&self) {
-        let mut stdout = stdout();
-        stdout.execute(terminal::Clear(ClearType::All)).unwrap();
-        stdout.execute(cursor::MoveTo(0, 0)).unwrap();
-
-        for y in 0..HEIGHT {
-            stdout.execute(crossterm::style::SetForegroundColor(Color::White)).unwrap();
-            write!(stdout, "{}", self.road[y]);
-            stdout.execute(crossterm::style::ResetColor).unwrap();
-            writeln!(stdout).unwrap();
-        }
-
-        // Render the car
-        stdout.execute(crossterm::style::SetForegroundColor(Color::Yellow)).unwrap();
-        write!(stdout, "{}", "^".repeat(1));
-        stdout.execute(crossterm::style::ResetColor).unwrap();
-        writeln!(stdout).unwrap();
-        stdout.flush().unwrap();
-    }
-
-    /// Handle user input (left/right/stop/quit logic)
     fn handle_input(&mut self) {
-        while event::poll(Duration::from_millis(0)).unwrap() {
-            if let Event::Key(key) = event::read().unwrap() {
+        while crossterm::event::poll(Duration::from_millis(0)).unwrap() {
+            if let Event::Key(key) = crossterm::event::read().unwrap() {
                 match key.code {
-                    KeyCode::Left => self.car.apply_input(-1.0),
-                    KeyCode::Right => self.car.apply_input(1.0),
-                    KeyCode::Esc => self.game_over = true,
+                    KeyCode::Left if self.player_x > 0 => self.player_x -= 1,
+                    KeyCode::Right if self.player_x < ROAD_WIDTH - 1 => self.player_x += 1,
+                    KeyCode::Esc => std::process::exit(0),
                     _ => {}
                 }
             }
         }
     }
 
-    fn main_loop(&mut self) {
-        while !self.game_over {
-            self.handle_input();
-            self.car.update();
-            self.scroll_road();
-            self.render();
-            self.score += 1;
-
-            thread::sleep(Duration::from_millis(33));
+    fn update(&mut self) {
+        // Randomly generate obstacles
+        if rand::thread_rng().gen_range(0..5) == 0 {
+            self.obstacles.push((rand::thread_rng().gen_range(0..ROAD_WIDTH), 0));
         }
 
-        println!("Game Over! Final Score: {}", self.score);
-    }
-}
+        // Move obstacles downward
+        for obstacle in &mut self.obstacles {
+            obstacle.1 += 1;
+        }
 
-/// Simulate road randomness
-fn random_road_segment() -> char {
-    if rand::random::<f32>() > 0.8 {
-        '.'
-    } else {
-        ' '
+        // Remove obstacles that are out of the screen
+        self.obstacles.retain(|&(_, y)| y < SCREEN_HEIGHT);
+    }
+
+    fn check_collision(&self) -> bool {
+        for &(obstacle_x, obstacle_y) in &self.obstacles {
+            if obstacle_y == SCREEN_HEIGHT - 1 && obstacle_x == self.player_x {
+                return true; // Collision detected
+            }
+        }
+        false
+    }
+
+    fn render(&self) {
+        let mut stdout = stdout();
+        stdout.execute(terminal::Clear(ClearType::All)).unwrap();
+        stdout.execute(crossterm::cursor::MoveTo(0, 0)).unwrap();
+
+        // Render player
+        stdout.execute(crossterm::cursor::MoveTo(self.player_x as u16, SCREEN_HEIGHT - 1))
+            .unwrap();
+        write!(stdout, "{}", PLAYER_SYMBOL).unwrap();
+
+        // Render obstacles
+        for &(obstacle_x, obstacle_y) in &self.obstacles {
+            if obstacle_y < SCREEN_HEIGHT {
+                stdout.execute(crossterm::cursor::MoveTo(obstacle_x as u16, obstacle_y))
+                    .unwrap();
+                write!(stdout, "{}", OBSTACLE_SYMBOL).unwrap();
+            }
+        }
+
+        stdout.flush().unwrap();
     }
 }
 
 fn main() {
     let mut stdout = stdout();
     terminal::enable_raw_mode().unwrap();
-    stdout.execute(cursor::Hide).unwrap();
+    stdout.execute(crossterm::cursor::Hide).unwrap();
 
     let mut game = Game::new();
-    game.main_loop();
+
+    loop {
+        game.handle_input();
+        game.update();
+        game.render();
+        if game.check_collision() {
+            println!("\nGame Over!");
+            break;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
 
     terminal::disable_raw_mode().unwrap();
-    stdout.execute(cursor::Show).unwrap();
+    stdout.execute(crossterm::cursor::Show).unwrap();
 }
